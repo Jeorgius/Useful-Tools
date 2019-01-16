@@ -1,0 +1,446 @@
+//import com.sun.org.apache.xalan.internal.xsltc.compiler.Copy
+
+apply plugin: 'java'
+apply plugin: 'groovy'
+apply plugin: 'eclipse'
+apply plugin: 'idea'
+
+[ compileJava, compileTestJava ]*.options*.encoding = 'UTF-8'
+
+
+compileJava {
+    options.fork = true
+    options.forkOptions.executable = 'javac'
+    options.compilerArgs << "-XDignore.symbol.file"
+}
+
+def generatedResources = "$buildDir/DBScriptsTemp"
+def resultScriptDir = "$buildDir/DBScripts"
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/java"]
+        }
+    }
+
+    dbScripts {
+        resources {
+            srcDirs = ["../db-migrations/update"]
+            output.resourcesDir = "${generatedResources}"
+        }
+    }
+}
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+dependencies {
+
+    compile fileTree(dir: '../appserver/releasejars/jboss/oltp/base', include: '*.jar')
+    compile fileTree(dir: '../appserver/releasejars/jboss/oltp/3rdparty', include: '*.jar')
+    compile fileTree(dir: '../commonlib', include: '*.jar')
+    compile fileTree(dir: 'releasejars', include: '*.jar')
+    compile fileTree(dir: '../oahome/shared/lib', include: '*.jar')
+    compile fileTree(dir: '../oahome/shared/applications/webui/lib/base/', include: '*.jar')
+    compile fileTree(dir: '../oahome/shared/applications/webui/lib/3rdparty/', include: '*.jar')
+    compile fileTree(dir: '../oahome/shared/lib/3rdparty', include: '*.jar')
+    compile fileTree(dir: '../oahome/shared/lib/patch', include: '*.jar')
+    compile fileTree(dir: '../scheduler/releasejars', include: '*.jar')
+    compile fileTree(dir: '../appserver/releasejars', include: '*.jar')
+}
+
+
+
+
+task buildAppPath(type:Jar) {
+
+    def commitid = 'git rev-parse HEAD'.execute(null, projectDir).text
+
+    manifest {
+        attributes Revision: commitid
+    }
+
+    def command = "git diff-tree --no-commit-id --name-only -r f994273ce40..HEAD"
+
+    def p = command.execute(null, projectDir)
+
+    def listfile = []
+
+    p.text.eachLine {
+        if (it ==~ '^appserver.*' && it ==~ '.*[.]java$') {
+            listfile.add it.replaceAll('[.]java$', '*').replaceAll('^appserver/src/java/', '')
+        }
+    }
+
+    /*
+    def issue = "git log " + lastTagsResult.text.trim() + "..HEAD --pretty=oneline | perl -ne '{ /(\\w+)-(\\d+)/ && print \"\$1-\$2\\n\" }' | sort | uniq"
+    println issue
+    def issueResult = ['sh', '-c', issue].execute(null, projectDir)
+    */
+
+    archiveName="wmserver-patch.jar"
+
+    from sourceSets.main.output
+    from sourceSets.dbScripts.output
+
+    for(String str : listfile)
+        include str
+
+}
+
+
+task lt_build (dependsOn: buildAppPath) << {
+
+    //buildAppPath.execute()
+
+    /*
+    task (copyAppJar, type: Copy) {
+        from 'releasejars/was/wmserver.ear'
+        into 'build/libs'
+    }.execute()
+
+    task (unzipAppJar, type: Copy) {
+        def zipFile = file("${buildDir}/libs/wmserver.ear")
+        def outputDir = file("${buildDir}/unpacked/")
+
+        from zipTree(zipFile)
+        into outputDir
+
+    }.execute()
+
+    task (copyPathToUnpack, type: Copy) {
+        from "${buildDir}/libs/wmserver-patch.jar"
+        into "${buildDir}/unpacked/lib/patch"
+    }.execute()
+
+    task (zipApp, type: Zip) {
+
+        from ("${buildDir}/unpacked/"){
+            include '**'
+        }
+
+        into ""
+        destinationDir(new File("${buildDir}/libs/"))
+        archiveName 'wmserver.ear'
+    }.execute()
+
+    task (deleteGraphicsAssets, type: Delete) {
+        def dirName = "${buildDir}/unpacked"
+        delete dirName
+    }.execute()
+    */
+    lt_buildAllScripts.execute()
+}
+
+task lt_buildScripts (dependsOn: lt_build) << {
+
+    def final firstTag = '1.0'
+    def currentBranch = getCurrentGitBranch()
+    println currentBranch
+
+    def lastTags = "git describe --abbrev=0 --tags"
+    def lastTagsResult = lastTags.execute(null, projectDir)
+
+    lastTagsResult.waitFor()
+    if (lastTagsResult.exitValue() != 0){
+        println lastTagsResult.errorStream.text
+        deleteTempDB.execute()
+        return
+    }
+    lastTagsResult = lastTagsResult.text.trim()
+    println lastTagsResult
+
+    def diffFile
+
+    /*
+    if (lastTagsResult == firstTag || !(currentBranch == 'master')) {
+        println "Чо я тут забыл?"
+        diffFile = "git diff-tree --no-commit-id --name-only -r " + lastTagsResult + "..HEAD"
+        println diffFile
+    }
+    else {
+        //def twoLastTags = "git describe --tags \$(git rev-list --tags --max-count=2)"
+        //def twoLastTagsResult = ['sh', '-c', twoLastTags].execute(null, projectDir) // работает только на Linux
+        def twoLastTags = "git describe --tags " + "git rev-list --tags --max-count=2".execute().text
+        def twoLastTagsResult = twoLastTags.execute(null, projectDir)
+
+        twoLastTagsResult.waitFor()
+        if (twoLastTagsResult.exitValue() != 0){
+            println twoLastTagsResult.errorStream.text
+        }
+
+        def listTags = []
+        listTags = twoLastTagsResult.text.readLines()
+
+        diffFile = "git diff-tree --no-commit-id --name-only -r " + listTags[1] + ".." + listTags[0]
+        println diffFile
+    }
+    */
+
+    diffFile = "git diff-tree --no-commit-id --name-only -r " + lastTagsResult + "..HEAD"
+    println diffFile
+
+    def diffFileResult = diffFile.execute(null, projectDir)
+
+    diffFileResult.waitFor()
+    if (diffFileResult.exitValue() != 0){
+        println diffFileResult.errorStream.text
+    }
+
+    def listfileSql = []
+    diffFileResult.text.eachLine {
+        if (it ==~ '^db-migrations/update/.*' && it ==~ '.*[.]sql$') {
+            listfileSql.add it.replaceAll('db-migrations/update/', '')
+            println it.replaceAll('db-migrations/update/', '')
+        }
+    }
+
+    if 	(listfileSql.size == 0) {
+        println "Not found SQL File. ListFileSql is empty"
+        deleteTempDB.execute()
+        return
+    }
+
+    new File ("${resultScriptDir}").mkdir()
+    def releaseSql= new File("${resultScriptDir}/" + currentBranch + "-" + lastTagsResult + ".sql")
+    println releaseSql
+
+    releaseSql.write('/* Generated by gradle build // ' + getTimestamp() + ' */ \n')
+
+    for (String str : listfileSql) {
+
+        releaseSql.append('\n /* ' + str + ' */ \n', 'utf-8')
+
+        new File (generatedResources + "/" + str).eachLine {
+            releaseSql.append(it+ '\n', 'utf-8')
+        }
+    }
+
+    if (currentBranch == 'master') {
+
+        def dirRealese = new File ("${rootDir}/db-migrations/release/release-"+ lastTagsResult)
+        dirRealese.mkdirs()
+        println dirRealese
+
+        task (copyTask, type: Copy) {
+            from "${releaseSql}"
+            into "${dirRealese}"
+        }.execute()
+
+        println "git add ${dirRealese}".execute(null, projectDir).text
+        println "git commit -m\"Gradle commit. Added release-${lastTagsResult} scripts \"".execute(null, projectDir).text
+        println "git push origin master".execute(null, projectDir).text
+    }
+
+    deleteTempDB.execute()
+}
+
+task lt_buildScriptsManualRange (dependsOn: buildAppPath) << {
+
+    def currentBranch = getCurrentGitBranch()
+    println currentBranch
+
+    def props = new Properties()
+    file("${rootDir}/db-migrations/BuildScript.properties").withInputStream { props.load(it) }
+
+    def range = props.getProperty("range")
+
+    def diffFile = "git diff-tree --no-commit-id --name-only -r " + range
+    println diffFile
+    def diffFileResult = diffFile.execute(null, projectDir)
+
+    diffFileResult.waitFor()
+    if (diffFileResult.exitValue() != 0){
+        println diffFileResult.errorStream.text
+    }
+
+    def listfileSql = []
+    diffFileResult.text.eachLine {
+        if (it ==~ '^db-migrations/update/.*' && it ==~ '.*[.]sql$') {
+            listfileSql.add it.replaceAll('db-migrations/update/', '')
+            println it.replaceAll('db-migrations/update/', '')
+        }
+    }
+
+    if 	(listfileSql.size == 0) {
+        println "Not found SQL File. ListFileSql is empty"
+        deleteTempDB.execute()
+        return
+    }
+
+    new File ("${resultScriptDir}").mkdir()
+    def releaseSql= new File("${resultScriptDir}/" + currentBranch + "-" + range + ".sql")
+    println releaseSql
+
+    releaseSql.write('/* Generated by gradle build // ' + getTimestamp() + ' */ \n')
+
+    for (String str : listfileSql) {
+
+        releaseSql.append('\n /* ' + str + ' */ \n', 'utf-8')
+
+        new File (generatedResources + "/" + str).eachLine {
+            releaseSql.append(it+ '\n', 'utf-8')
+        }
+    }
+
+    deleteTempDB.execute()
+}
+
+task lt_buildAllScripts (dependsOn: buildAppPath) << {
+
+    new File ("${resultScriptDir}").mkdir()
+    def releaseSql= new File("${resultScriptDir}/AllScripts.sql")
+    println releaseSql
+
+    releaseSql.write('/* Generated by gradle build // ' + getTimestamp() + ' */ \n')
+
+    new File (generatedResources).eachFile {
+        if (it ==~ '.*[.]sql$') {
+            releaseSql.append('\n /* ' + it.name + ' */ \n', 'utf-8')
+            it.eachLine {
+                releaseSql.append(it + '\n', 'utf-8')
+            }
+        }
+    }
+
+    deleteTempDB.execute()
+}
+
+task deleteTempDB (type: Delete) {
+    def dirName = "${generatedResources}"
+    delete dirName
+}
+
+def getTimestamp() {
+    def date = new Date()
+    return date.format('yyyy-MM-dd HH:mm')
+}
+
+
+def getCurrentGitBranch() {
+    def gitBranch = "Unknown branch"
+    try {
+        def workingDir = new File("${project.projectDir}")
+        def result = 'git rev-parse --abbrev-ref HEAD'.execute(null, workingDir)
+        result.waitFor()
+        if (result.exitValue() == 0) {
+            gitBranch = result.text.trim()
+        }
+    } catch (e) {
+    }
+    return gitBranch
+}
+
+
+remotes.each {
+
+    def item = it;
+
+    task("lt_deploy_${item.name}") << {
+
+        def server = item;
+        println "\n\nDEPLOY IN TO ${server.name} : ${server.host}\n\n"
+
+        ssh.run {
+
+            session(server) {
+                execute "/cygdrive/c/Windows/system32/sc.exe stop 'Infor SCE WM Socket Server scprd-wmsocket1'; echo 1"
+                execute "/cygdrive/c/Windows/system32/sc.exe stop 'Infor SCE WM Application Server scprd-wmapp1'; echo 1"
+
+                put from: "${buildDir}/libs/wmserver.ear" , into: "/cygdrive/c/Infor/sce/jboss-as-7.2.0.Final/scprd-wmapp1/deployments"
+
+                execute "/cygdrive/c/Windows/system32/sc.exe start 'Infor SCE WM Application Server scprd-wmapp1'; echo 1"
+                execute "/cygdrive/c/Windows/system32/sc.exe start 'Infor SCE WM Socket Server scprd-wmsocket1'; echo 1"
+            }
+        }
+    }
+
+    task("lt_buildAndDeploy_${it.name}") << {
+
+        def server = item;
+
+        lt_build.execute()
+
+        project."lt_deploy_${server.name}".execute()
+
+    }
+
+}
+
+/*
+task deploy << {
+
+		ssh.run {
+
+			session(remotes.InforLocal) {
+
+				execute "/cygdrive/c/Windows/system32/sc.exe stop 'Infor SCE WM Socket Server scprd-wmsocket1'; echo 1"
+				execute "/cygdrive/c/Windows/system32/sc.exe stop 'Infor SCE WM Application Server scprd-wmapp1'; echo 1"
+
+
+				put from: "${buildDir}/libs/wmserver.ear" , into: "/cygdrive/c/Infor/sce/jboss-as-7.2.0.Final/scprd-wmapp1/deployments"
+
+				execute "/cygdrive/c/Windows/system32/sc.exe start 'Infor SCE WM Application Server scprd-wmapp1'; echo 1"
+				execute "/cygdrive/c/Windows/system32/sc.exe start 'Infor SCE WM Socket Server scprd-wmsocket1'; echo 1"
+
+			}
+
+
+		}
+
+}
+*/
+
+
+
+
+/*
+task testDeploy_appserver << {
+
+		ssh.run {
+
+			session(remotes.InforLocal) {
+
+				String tmpDir = '/cygdrive/c/deploy'
+				def inforDir = 'C:/Infor/sce/jboss-as-7.2.0.Final/'
+				def commandCommitName = 'git show-ref --head HEAD'
+				def commitname = commandCommitName.execute(null, projectDir).text.split(' ')[0]
+				def AppArchiveName="BuildApp-${commitname[0..6]}.jar"
+				def uiArchiveName="BuildWebUi-${commitname[0..6]}.jar"
+
+
+				execute "mkdir -p $tmpDir"
+				execute "mkdir -p ${tmpDir}/appserver"
+				execute "cd ${tmpDir}/appserver; rm -rf *"
+
+				execute "cp ${inforDir}/scprd-wmapp1/deployments/wmserver.ear ${tmpDir}/appserver"
+				execute "cd ${tmpDir}/appserver; unzip wmserver.ear 'lib/patch/manifest.jar'"
+				execute "cd ${tmpDir}/appserver/lib/patch/; unzip manifest.jar META-INF/MANIFEST.MF"
+
+				def manifesttxt = get from: "${tmpDir}/appserver/lib/patch/META-INF/MANIFEST.MF"
+
+				StringBuilder sb = new StringBuilder();
+				manifesttxt.eachLine {
+
+					if (it.split(':')[0].equalsIgnoreCase('Class-Path')){
+						sb.append("Class-Path: ${AppArchiveName}\r\n" )
+					} else
+						sb.append(it + '\r\n');
+				}
+
+				put text: sb , into: "$tmpDir/appserver/lib/patch/META-INF/MANIFEST.MF"
+
+				execute "cd ${tmpDir}/appserver/lib/patch; zip manifest.jar META-INF/MANIFEST.MF"
+				execute "cd ${tmpDir}/appserver/; zip wmserver.ear lib/patch/manifest.jar"
+
+				put from: buildDir.toString() + "/libs/${AppArchiveName}" , into: "$tmpDir/appserver/lib/patch/"
+				execute "cd $tmpDir/appserver; zip wmserver.ear lib/patch/${AppArchiveName}"
+
+			}
+
+
+		}
+
+	}
+	*/

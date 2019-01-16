@@ -1,0 +1,289 @@
+#!/bin/bash
+
+printf "User full name $BUILD_USER_ID\n"
+
+#functions
+
+#logger
+function log {
+	mkdir -p "${WORKSPACE}/builds/logs/"
+	d=$(date +"%d.%m.%Y %H:%M:%S") 
+    printf "$d:$1 \n" >> "${WORKSPACE}/builds/logs/build-${BUILD_ID}.log"
+}
+
+
+
+# root directory
+# tag id
+#RELEASE_ID=$(git describe --abbrev=0 --tags --always)
+RELEASE_ID=$p_release_id
+echo $RELEASE_ID
+
+
+#branch name
+BRANCH_ID=${GIT_BRANCH#*/} # develop or master or prest
+
+
+
+# if building branch not eq develop and ta
+#if [ $RELEASE_ID == release-* ] ; then 
+#	echo "this is release!"
+#else
+#	echo "This is not release, let's check branch name";
+    
+#    if [ "$BRANCH_ID" = "develop" ] ; then
+#    	log "This is development branch"
+#        RELEASE_ID="develop"
+#       MY_PARAM=$RELEASE_ID
+#    else
+#    	log "Seem like this is not develop branch $BRANCH_ID and tag not like release-* exit..."
+#        exit 1
+#    fi
+	
+#fi
+
+# base dir path  ../builds/develop or ../builds/release-*
+cwd="${WORKSPACE}/builds/$RELEASE_ID"
+
+# base dir
+BUILD_DIR="${WORKSPACE}/builds"
+
+
+###########################
+# Creating build directory
+
+if [[ -d $cwd ]]; then
+	rm -r $cwd   
+fi
+
+# base dir path  ../builds/develop or ../builds/release-*
+BASE_PATH=$cwd
+mkdir -p $BASE_PATH
+
+
+##########################################
+#creating lock file to store the version
+#
+LOCK_FILE_NAME="${WORKSPACE}/builds/build"
+log "Creating build file $LOCK_FILE_NAME"
+
+if [ ! -f $LOCK_FILE_NAME ]; then
+	NOW=$(date +"%d/%m/%Y %H:%M:%S") 
+    printf "Build: $RELEASE_ID\n" >> $LOCK_FILE_NAME
+    printf "Build date: $NOW" >> $LOCK_FILE_NAME
+   
+else
+	rm -r $LOCK_FILE_NAME
+    NOW=$(date +"%d/%m/%Y %H:%M:%S") 
+    printf "Build: $RELEASE_ID\n" >> $LOCK_FILE_NAME
+    printf "Build date: $NOW" >> $LOCK_FILE_NAME
+fi
+##########################################
+
+BASE_PATH_BACKUP="$BASE_PATH/backup"
+BASE_PATH_NEW="$BASE_PATH/new"
+
+#Путь к файлам переводов внутри воркспейса исходников
+TRANSLATE_PATH="${WORKSPACE}/translate"
+BASE_PATH_BACKUP_APP="$BASE_PATH_BACKUP/appserver"
+BASE_PATH_BACKUP_WEBUI="$BASE_PATH_BACKUP/webui"
+BASE_PATH_BACKUP_DB="$BASE_PATH_BACKUP/db_changelog"
+BASE_PATH_BACKUP_WEBRF="$BASE_PATH_BACKUP/webrf"
+BASE_PATH_BACKUP_EBM="$BASE_PATH_BACKUP/ebm"
+BASE_PATH_BACKUP_REP="$BASE_PATH_BACKUP/reports"
+BASE_PATH_BACKUP_CONF="$BASE_PATH_BACKUP/config"
+BASE_PATH_BACKUP_JS="$BASE_PATH_BACKUP/js"
+BASE_PATH_BACKUP_TRANSLATE="$BASE_PATH_BACKUP/translate"
+
+
+BASE_PATH_NEW_APP="$BASE_PATH_NEW/appserver"
+BASE_PATH_NEW_WEBUI="$BASE_PATH_NEW/webui"
+BASE_PATH_NEW_DB="$BASE_PATH_NEW/db_changelog"
+BASE_PATH_NEW_WEBRF="$BASE_PATH_NEW/webrf"
+BASE_PATH_NEW_EBM="$BASE_PATH_NEW/ebm"
+BASE_PATH_NEW_REP="$BASE_PATH_NEW/reports"
+BASE_PATH_NEW_CONF="$BASE_PATH_NEW/config"
+BASE_PATH_NEW_JS="$BASE_PATH_NEW/js"
+BASE_PATH_NEW_TRANSLATE="$BASE_PATH_NEW/translate"
+
+
+
+mkdir  -p $BASE_PATH &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_APP &> /dev/null
+
+mkdir  -p "$BASE_PATH_BACKUP_APP/oltp" &> /dev/null
+mkdir  -p "$BASE_PATH_BACKUP_APP/batch" &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_WEBUI &> /dev/null
+
+mkdir  -p $BASE_PATH_BACKUP_DB &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_WEBRF &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_EBM &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_REP &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_CONF &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_JS &> /dev/null
+mkdir  -p $BASE_PATH_BACKUP_TRANSLATE &> /dev/null
+
+
+mkdir  -p $BASE_PATH_NEW &> /dev/null
+mkdir  -p $BASE_PATH_NEW_APP &> /dev/null
+mkdir  -p "$BASE_PATH_NEW_APP/oltp" &> /dev/null
+mkdir  -p "$BASE_PATH_NEW_APP/batch" &> /dev/null
+mkdir  -p $BASE_PATH_NEW_WEBUI &> /dev/null
+mkdir  -p $BASE_PATH_NEW_DB &> /dev/null
+mkdir  -p $BASE_PATH_NEW_WEBRF &> /dev/null
+mkdir  -p $BASE_PATH_NEW_EBM &> /dev/null
+mkdir  -p $BASE_PATH_NEW_REP &> /dev/null
+mkdir  -p $BASE_PATH_NEW_CONF &> /dev/null
+mkdir  -p $BASE_PATH_NEW_JS &> /dev/null
+mkdir  -p $BASE_PATH_NEW_TRANSLATE &> /dev/null
+
+
+function execute_patch {
+  log "execute_patch $1 $2 $3 $4"
+  log "Checking $3 artifacts"
+  if [ "$(ls -I "*.txt" -A $1)" ]; then    
+        log "Take action $3 directory is not empty"
+        for filename in `find $1 -name $4` ; do
+          onlyfile="$(basename $filename)"
+          MD5="$BUILD_DIR/checksum/$onlyfile.md5"
+          if [ ! -f $MD5 ] ; then
+              log "No md5sum file found for $onlyfile"
+              log "creating md5 file $MD5"
+              touch $MD5
+              
+              if [ $2 = $BASE_PATH_NEW_APP ] ; then
+              	cp -prv $filename "$2/oltp"
+                cp -prv $filename "$2/batch"
+              else
+              	cp -prv $filename $2
+              fi 
+              md5sum $filename > $MD5 
+          else
+              if md5sum -c $MD5; then
+                  log "The MD5 sum matched for $onlyfile"            
+              else
+                  if [ $2 = $BASE_PATH_NEW_APP ] ; then
+              		cp -prv $filename "$2/oltp"
+                	cp -prv $filename "$2/batch"
+                  else
+                  	cp -prv $filename $2
+              	  fi
+                  md5sum $filename > $MD5
+              fi
+          fi
+        done   
+  else
+      echo "$1 is Empty"
+      log "No $3 patches builded"
+  fi
+
+}
+
+
+##############################################################
+# Обрабатываем appserver patch
+##############################################################
+APP_PATCH="${WORKSPACE}/appserver/build/libs"
+execute_patch $APP_PATCH "$BASE_PATH_NEW_APP" "appserver-oltp", "*.jar"
+
+######################################################
+# Обрабатываем webui patch
+######################################################
+WEB_PATCH="${WORKSPACE}/webui/build/libs"
+execute_patch $WEB_PATCH "$BASE_PATH_NEW_WEBUI" "webui", "*.jar"
+
+######################################################
+# Копируем файлы переводов
+######################################################
+execute_patch $TRANSLATE_PATH "$BASE_PATH_NEW_TRANSLATE" "translate", "*.properties"
+
+######################################################
+# Копируем файлы javascript
+######################################################
+JS_PATH="${WORKSPACE}/JS_BASE"
+execute_patch $JS_PATH "$BASE_PATH_NEW_JS" "javaScript", "*.js"
+
+
+######################################################
+# Копируем файлы web-rf
+######################################################
+WEBRF_PATH="${WORKSPACE}/web-rf/"
+execute_patch $WEBRF_PATH "$BASE_PATH_NEW_WEBRF" "web-rf screens", "*.zip"
+
+
+######################################################
+# Копируем файлы ebm файл
+######################################################
+EBM_PATH="${WORKSPACE}/webui/modules-migrations/"
+execute_patch $EBM_PATH "$BASE_PATH_NEW_EBM" "ebm", "*.ebm"
+
+
+######################################################
+# Копируем файлы обновления конфигураций сервисов
+######################################################
+CONF_PATH="${WORKSPACE}/appserver/conf/custom"
+execute_patch $CONF_PATH "$BASE_PATH_NEW_CONF" "configuration", "*.xml"
+
+
+######################################################
+# Копируем файлы обновления отчетов
+######################################################
+REP_PATH="${WORKSPACE}/reports/custom/"
+execute_patch $REP_PATH "$BASE_PATH_NEW_REP" "reports", "*.rptdesign"
+
+
+######################################################
+# Копируем файлы обновления базы даных
+######################################################
+
+CHANGLOG_PATH="${WORKSPACE}/db-migrations/changelog/${RELEASE_ID}"
+printf "Change log path is ${CHANGLOG_PATH} \n"
+
+if [[ -d $CHANGLOG_PATH ]] ; then
+  if [ "$(ls -I "*.txt" -A $CHANGLOG_PATH)" ]; then    
+        log "Take action change log file directory is not Empty" 
+		find $CHANGLOG_PATH -name '*.xml' -exec cp -prv '{}' $BASE_PATH_NEW_DB ';'
+		
+  else
+        log "$CHANGLOG_PATH is Empty"
+        exit 1
+  fi
+
+else
+	log "$CHANGLOG_PATH doesn't exist"
+fi
+
+
+######################################################
+#creating zip archive
+######################################################
+cd $BASE_PATH
+NOW=$(date +"%Y%m%d") 
+ZIP_FILE_NAME="build-${RELEASE_ID}_$NOW.zip"
+#create final archive
+cp "${WORKSPACE}/builds/deploy.sh" $BASE_PATH
+cp "${WORKSPACE}/builds/build" $BASE_PATH
+zip -r -m $ZIP_FILE_NAME *
+
+
+#copy to push to destination server
+if (test -d ${WORKSPACE}/builds/transfer) then
+	log "Transfer derictory allready exist"
+	rm -r "${WORKSPACE}/builds/transfer/"
+	mkdir "${WORKSPACE}/builds/transfer/"
+	cp -rf $ZIP_FILE_NAME "${WORKSPACE}/builds/transfer/"
+    
+else
+	mkdir "${WORKSPACE}/builds/transfer/"
+	cp -rf $ZIP_FILE_NAME "${WORKSPACE}/builds/transfer/"
+fi
+
+
+mkdir -p "${WORKSPACE}/builds/${BUILD_ID}/"
+cp -rf $ZIP_FILE_NAME "${WORKSPACE}/builds/${BUILD_ID}"
+rm -rf "${WORKSPACE}/builds/${RELEASE_ID}"
+
+
+log " Build ended $RELEASE_ID"
+log $MY_PARAM
